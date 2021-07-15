@@ -25,20 +25,26 @@ from deeplabcut.utils.auxiliaryfunctions import read_config
 
 # TODO: read no. of individuals if multi, decide if 1 file per indiv., or multiple tracks in one file
 
+def check_inputs(camlist, offsets):
+    if len(camlist) != len(offsets): 
+        raise ValueError("Bad input arguments: The number of videos should match the number of camera offsets!")
+
 def dlc2dlt(config, opath, camlist, flipy, offsets, like):
-    config=Path(config)
+    # NOTE: Only 1 config? How to do for multiple views?
+    # config=[Path(cfg_file) for cfg_file in config]
+    config = config
     opath = Path(opath)
     offsets = [int(x) for x in offsets]
     numcams = len(camlist)
 
+    check_inputs(camlist, offsets)
+
     # load dlc config
     cfg = read_config(config)
-    #scorer = cfg['scorer']
     ma = cfg['multianimalproject']
 
     if ma:
         individuals = cfg['individuals']
-        # indiv = individuals[ind]
         bodyparts = cfg['multianimalbodyparts']
     else:
         bodyparts=cfg['bodyparts']
@@ -48,12 +54,13 @@ def dlc2dlt(config, opath, camlist, flipy, offsets, like):
     # first key is cam, second is indiv
     alldata = {}
     numframes = []
+    scorers = []
     digi = True
     # load each data file get some basic info and store data in a dict
     for c in range(numcams):
         #load the hd5
-        camdata = pd.read_hdf(camlist[c], 'df_with_missing')
-        scorer=camdata.columns.get_level_values('scorer')[0]
+        camdata = pd.read_hdf(camlist[c])
+        scorers.append(camdata.columns.get_level_values('scorer')[0])
         #get track names from first camera
         #if c== 0:
             #tracks = camdata.columns.get_level_values('bodyparts')
@@ -72,16 +79,17 @@ def dlc2dlt(config, opath, camlist, flipy, offsets, like):
             # set x,y values with likelihoods below like to nan
             # for each point
 
+        # set all values <= likelihood equal to nan 
         if ma:
             alldata[c]={}
             for ind in individuals:
                 for track in set(tracks):
-                    camdata.loc[camdata[scorer][ind][track]['likelihood'] <= like, (scorer, ind, track, ['x', 'y'])] = np.nan
-                alldata[c][ind]=camdata[scorer][ind]
+                    camdata.loc[camdata[scorers[c]][ind][track]['likelihood'] <= like, (scorers[c], ind, track, ['x', 'y'])] = np.nan
+                alldata[c][ind]=camdata[scorers[c]][ind]
         else:
             for track in set(tracks):
-                camdata.loc[camdata[scorer][track]['likelihood'] <= like, (scorer, track, ['x', 'y'])] = np.nan
-            alldata[c] = camdata[scorer]
+                camdata.loc[camdata[scorers[c]][track]['likelihood'] <= like, (scorers[c], track, ['x', 'y'])] = np.nan
+            alldata[c] = camdata[scorers[c]]
 
         # make a list to keep track of the number of frames in each camera's dataset
         numframes.append(max(camdata.index.values) + 1)
@@ -101,9 +109,17 @@ def dlc2dlt(config, opath, camlist, flipy, offsets, like):
     # loop through each camera's data and assign to the proper row
     for c, camdata in alldata.items():
 
+        #These stuff don't work. It doesn't find the video, it assumes it's in the same dir as the .h5 data
+        #
         # load each video, check for "height", and flip the y-coordinates (origin is lower left in Argus and DLTdv 1-7, upper left in openCV, DLC, DLTdv8)
         # DLC video name is datafile stem, plus _labeled.mp4
-        vidname = camlist[c].rsplit(scorer)[0] + '.mov'
+        vidname = camlist[c].split(scorers[c])[0] + '.avi' # NOTE: how to make this robust to any video type
+
+        #check if video is found
+        if not Path(vidname).resolve().exists():
+            raise ValueError(f'Could not find {vidname}.',
+                              'Make sure the .h5 file and the video are in the same directory.')
+
         cap = cv2.VideoCapture(str(vidname))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -208,16 +224,34 @@ def dlc2dlt(config, opath, camlist, flipy, offsets, like):
     #
 
 if __name__== '__main__':
-    parser = argparse.ArgumentParser(
-    description='convert argus to DLC labeled frames for training')
-    parser.add_argument('-config', help='input path to DLC config file')
-    parser.add_argument('-dlctracks', nargs='+', help='input paths of DLC tracked coordinates (hd5) in order used in DLT calibration, each path separated by a space')
-    parser.add_argument('-newpath', type=str, help = 'enter a path for saving, will overwrite if it already exists, should not be in DLC project folder, should end with filename prefix')
-    parser.add_argument('-flipy', default=True, help = 'flip y coordinates - necessar for Argus and DLTdv versions 1-7, set to False for DLTdv8')
-    parser.add_argument('-offsets', nargs='+', default = None, help='enter offsets as space separated list including first camera e.g.: -offsets 0 -12 2')
-    parser.add_argument('-like', default=0.9, help='enter the likelihood threshold - defaults to 0.9')
+    # parser = argparse.ArgumentParser(
+    # description='convert argus to DLC labeled frames for training')
+    # parser.add_argument('-config', help='input path to DLC config file')
+    # parser.add_argument('-videos', nargs='+', help='input path to videos')
+    # parser.add_argument('-dlctracks', nargs='+', help='input paths of DLC tracked coordinates (hd5) in order used in DLT calibration, each path separated by a space')
+    # parser.add_argument('-outpath', type=str, help = 'enter a path for saving, will overwrite if it already exists, should not be in DLC project folder, should end with filename prefix')
+    # parser.add_argument('-flipy', default=True, help = 'flip y coordinates - necessar for Argus and DLTdv versions 1-7, set to False for DLTdv8')
+    # parser.add_argument('-offsets', nargs='+', default = None, help='enter offsets as space separated list including first camera e.g.: -offsets 0 -12 2')
+    # parser.add_argument('-like', default=0.9, help='enter the likelihood threshold - defaults to 0.9')
+# 
+    # args = parser.parse_args()
+# 
+    # 
+    # dlc2dlt(args.config, args.outpath, args.dlctracks, args.flipy, args.offsets, float(args.like))
 
-    args = parser.parse_args()
+    CONFIG = '/media/data/aristotelis/fish/Schooling_B/silversideschooling-valentina-2021-05-21/config.yaml'
+    OUTPATH = '~/FILES/fish_reconstruction/DLT/test/'
+    # VIDEOS_PATH = ['/media/data/aristotelis/fish/Schooling_B/menidia schooling original videos/original videos for analysis/menidia swimming 2018/menidia swimming school 5/menidia.school5.76rpm.s11.A.avi']
+    # H5_FILES = ['/media/data/aristotelis/fish/Schooling_B/fishvideos/menidia.school5.76rpm.s11.ADLC_dlcrnetms5_SchoolingMay21shuffle1_40000_el.h5']
+    H5_FILES = ['/media/data/aristotelis/fish/Schooling_B/menidia schooling original videos/original videos for analysis/menidia swimming 2018/menidia swimming school 5/menidia.school5.76rpm.s11.ADLC_dlcrnetms5_SchoolingMay21shuffle1_40000_el.h5',
+                '/media/data/aristotelis/fish/Schooling_B/menidia schooling original videos/original videos for analysis/menidia swimming 2018/menidia swimming school 5/menidia.school5.76rpm.s11.DDLC_dlcrnetms5_SchoolingMay7shuffle1_20000_el.h5']
+    FLIPY = None
+    OFFSETS = ['0', '0']
+    LIKE = 0.8
 
-    
-    dlc2dlt(args.config, args.newpath, args.dlctracks, args.flipy, args.offsets, float(args.like))
+    #TODO: need to add videos path. It assumes it's in the same folder as the h5
+    dlc2dlt(CONFIG, OUTPATH, H5_FILES, FLIPY, OFFSETS, LIKE)
+
+
+
+
